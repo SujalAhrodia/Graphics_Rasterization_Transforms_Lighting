@@ -29,6 +29,7 @@ var vertexNormalBuffers = []; //this contains vertex normals in triplets
 
 var vertexPositionAttrib; // where to put position for vertex shader
 var vertexNormalAttrib;
+var vertexMode;
 var vertexAmbient;
 var vertexDiffuse;
 var vertexSpecular;
@@ -41,6 +42,9 @@ var modelMatrixULoc; // where to put the model matrix for vertex shader
 var viewMatrixULoc; //view matrix location
 var perspectiveMatrixULoc;  //perpective matrix location
 
+var mode = 0.0;
+var triangleSelection = [];
+var triangleSelection_index = -1;
 
 // ASSIGNMENT HELPER FUNCTIONS
 
@@ -142,6 +146,8 @@ function loadTriangles() {
 
             inputTriangles[whichSet].mMatrix = mat4.create();
             
+            triangleSelection.push(0);
+
             // set up the triangle index array, adjusting indices across sets
             inputTriangles[whichSet].indexArray = []; // create a list of tri indices for this tri set
             triSetSizes[whichSet] = inputTriangles[whichSet].triangles.length;
@@ -165,10 +171,14 @@ function setupShaders() {
     // define fragment shader in essl using es6 template strings
     var fShaderCode = `
         precision mediump float; 
+        
+        uniform float mode;
+
         uniform vec3 Ka;
         uniform vec3 Kd;
         uniform vec3 Ks;
         uniform float n;
+
         uniform vec3 lightPosition;
         uniform vec3 eyePosition;
 
@@ -182,14 +192,25 @@ function setupShaders() {
             float lambertian = max(dot(N,L),0.0);
 
             vec3 V = normalize(eyePosition - P);
-
-            vec3 H = normalize(V+L);
             
-            float specular = pow(max(dot(H,N),0.0),n);
+            vec3 R = normalize(N);
+
+            float specular = 0.0;
+            
+            if(mode == 0.0) //Blinn-Phong
+            {
+                vec3 H = normalize(V+L);
+                specular = pow(max(dot(H,N),0.0),n);
+            }
+            else if (mode == 1.0) //Phong
+            {
+                R = normalize(reflect(-L,N));
+                specular = pow(max(dot(R, V),0.0),n);
+            }
 
             vec3 color = Ka + Kd*lambertian + Ks*specular;
 
-            gl_FragColor = vec4(color,1.0); // all fragments are white
+            gl_FragColor = vec4(color,1.0); // coloring the fragments with computed color values
         }
     `;
     
@@ -255,6 +276,8 @@ function setupShaders() {
                 viewMatrixULoc = gl.getUniformLocation(shaderProgram, "uViewMatrix"); //ptr to vmat
                 perspectiveMatrixULoc = gl.getUniformLocation(shaderProgram, "uPerpectiveMatrix");
 
+                vertexMode = gl.getUniformLocation(shaderProgram, "mode");
+
                 vertexAmbient = gl.getUniformLocation(shaderProgram, "Ka");
                 vertexDiffuse = gl.getUniformLocation(shaderProgram, "Kd");
                 vertexSpecular = gl.getUniformLocation(shaderProgram, "Ks");
@@ -262,7 +285,6 @@ function setupShaders() {
 
                 vertexEye = gl.getUniformLocation(shaderProgram, "eyePosition");
                 vertexLight = gl.getUniformLocation(shaderProgram, "lightPosition");
-
 
                 gl.enableVertexAttribArray(vertexPositionAttrib); // input to shader from array
                 gl.enableVertexAttribArray(vertexNormalAttrib); // input to shader from array
@@ -278,10 +300,12 @@ function setupShaders() {
 
 // render the loaded model
 function renderTriangles() {
-    //requestAnimationFrame(renderTriangles);
+    requestAnimationFrame(renderTriangles);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); // clear frame/depth buffers    
 
-    lookAtP = vec3.add(lookAtP, Eye, lookAt);
+    lookAtP = new vec3.fromValues(0,0,0);
+
+    vec3.add(lookAtP, Eye, lookAt);
 
     var viewMat = mat4.lookAt(mat4.create(), Eye, lookAtP, up);
     console.log(viewMat);
@@ -299,6 +323,7 @@ function renderTriangles() {
         gl.uniform3fv(vertexEye, Eye);
         gl.uniform3fv(vertexLight, Light);
 
+        gl.uniform1f(vertexMode, mode);
         gl.uniform3fv(vertexAmbient, inputTriangles[whichTriSet].Ka);
         gl.uniform3fv(vertexDiffuse, inputTriangles[whichTriSet].Kd);
         gl.uniform3fv(vertexSpecular, inputTriangles[whichTriSet].Ks);
@@ -318,9 +343,7 @@ function renderTriangles() {
     } // end for each tri set
 
 } // end render triangles
-//
 
-//
 /* MAIN -- HERE is where execution begins after window load */
 function moveForward()
 {
@@ -375,41 +398,182 @@ function moveRight()
     vec3.scale(x, x, -0.01);
     vec3.add(Eye, Eye, x);
 }
+
+function Centroid(whichTriSet)
+{
+    var coordinates = inputTriangles[whichTriSet].coordArray;
+    var centroid = vec3.fromValues(0.0, 0.0, 0.0);
+
+    for (var  i = 0; i < coordinates.length/3; i++) 
+    {
+        centroid[0] = centroid[0] + coordinates[i*3];
+        centroid[1] = centroid[1] + coordinates[i*3 + 1];
+        centroid[2] = centroid[2] + coordinates[i*3 + 2];
+    }
+
+    vec3.scale(centroid, centroid, 1/(coordinates.length/3));
+
+    var t = new vec4.fromValues(0, 0, 0, 1);
+    t[0] = centroid[0];
+    t[1] = centroid[1];
+    t[2] = centroid[2];
+
+    vec4.transformMat4(t, t, inputTriangles[whichTriSet].mMatrix);
+
+    centroid[0] = t[0];
+    centroid[1] = t[1];
+    centroid[2] = t[2];
+
+    return centroid;
+}
+
+function Highlight(whichTriSet, scaleFactor)
+{
+    var setCenter = Centroid(whichTriSet);
+
+    mat4.multiply(inputTriangles[whichTriSet].mMatrix, 
+                    mat4.fromTranslation(mat4.create(), vec3.negate(vec3.create(), setCenter)),
+                    inputTriangles[whichTriSet].mMatrix);
+
+    var scale = vec3.fromValues(scaleFactor, scaleFactor, scaleFactor);
+
+    mat4.multiply(inputTriangles[whichTriSet].mMatrix,
+                    mat4.fromScaling(mat4.create(),scale),
+                    inputTriangles[whichTriSet].mMatrix);
+
+    mat4.multiply(inputTriangles[whichTriSet].mMatrix,
+                    mat4.fromTranslation(mat4.create(),setCenter),
+                    inputTriangles[whichTriSet].mMatrix);
+        console.log("scale:"+inputTriangles[whichTriSet].mMatrix);
+
+}
+
+function anti_Highlight()
+{
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        triangleSelection[triangleSelection_index] = 0;
+        Highlight(triangleSelection_index, 1/1.2);   
+    }
+}
+
+function inc_A()
+{   
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        inputTriangles[triangleSelection_index].Ka[0] = (inputTriangles[triangleSelection_index].Ka[0] + 0.1);
+        inputTriangles[triangleSelection_index].Ka[1] = (inputTriangles[triangleSelection_index].Ka[1] + 0.1);
+        inputTriangles[triangleSelection_index].Ka[2] = (inputTriangles[triangleSelection_index].Ka[2] + 0.1);
+    }
+
+}
+
+function inc_D()
+{
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        inputTriangles[triangleSelection_index].Kd[0] = (inputTriangles[triangleSelection_index].Kd[0] + 0.1)%1;
+        inputTriangles[triangleSelection_index].Kd[1] = (inputTriangles[triangleSelection_index].Kd[1] + 0.1)%1;
+        inputTriangles[triangleSelection_index].Kd[2] = (inputTriangles[triangleSelection_index].Kd[2] + 0.1)%1;
+    }
+}
+
+function inc_S()
+{
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        inputTriangles[triangleSelection_index].Ks[0] = (inputTriangles[triangleSelection_index].Ks[0] + 0.1);
+        inputTriangles[triangleSelection_index].Ks[1] = (inputTriangles[triangleSelection_index].Ks[1] + 0.1);
+        inputTriangles[triangleSelection_index].Ks[2] = (inputTriangles[triangleSelection_index].Ks[2] + 0.1);
+    }
+}
+
+function inc_exp()
+{
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        inputTriangles[triangleSelection_index].n = (inputTriangles[triangleSelection_index].n + 1);
+       
+    }
+}
+
 function moveThings(e)
 {   
+    console.log(e.key);
     console.log(e.keyCode);
     console.log(e.charCode);
 
-    switch(e.charCode)
+    switch(e.key)
     {
+        case 'a': moveLeft();
+                    break;
+        case 'd': moveRight();
+                    break;
+        case 'w': moveForward();
+                    break;
+        case 's': moveBackward();
+                    break;
+        case 'q': moveUp();
+                    break;
+        case 'e': moveDown();
+                    break;
+        case 'A':   break;
+
+        case 'D':   break;
+
+        case 'ArrowLeft': 
+                    if (triangleSelection_index != -1)
+                    {
+                        if(triangleSelection[triangleSelection_index] == 1)
+                        {   
+                            triangleSelection[triangleSelection_index] = 0;
+                            Highlight(triangleSelection_index, 1/1.2);
+                        }
+                    }
+                    triangleSelection_index-=1;
+
+                    if (triangleSelection_index <= -1)
+                    {
+                        triangleSelection_index = numTriangleSets -1;
+                    }
+                    triangleSelection[triangleSelection_index] = 1;
+                    Highlight(triangleSelection_index, 1.2);
+                    //console.log(triangleSelection_index)
+                    break;
+
+        case 'ArrowRight': 
+                    if(triangleSelection_index != -1)
+                    {
+                        if(triangleSelection[triangleSelection_index] == 1)
+                        {
+                            triangleSelection[triangleSelection_index] =0;
+                            Highlight(triangleSelection_index, 1/1.2);
+                        }
+                    }
+                    triangleSelection_index = (triangleSelection_index+1) % numTriangleSets;
+                    triangleSelection[triangleSelection_index] = 1; //Phong
+                    Highlight(triangleSelection_index, 1.2);
+                    console.log("Right");
+                    break;
+
+        case ' ': anti_Highlight();
+                    break;
+
+        case 'b': mode = (mode+1)%2;
+                    break;
+
+        case 'n': inc_exp();
+                    break;
+
+        case '1': inc_A();
+                    break;
+        case '2': inc_D();
+                    break;
+        case '3': inc_S();
+                    break;
         
-        
-        case 65:
+        default:    break;
 
-        case 68:
-
-        case 87:
-
-        case 83:
-    }
-    switch(e.keyCode)
-    {
-        case 37: console.log("left");
-                    break;
-        case 39: console.log("right");
-                    break;
-        case 65: moveLeft();
-                    break;
-        case 68: moveRight();
-                    break;
-        case 87: moveForward();
-                    break;
-        case 83: moveBackward();
-                    break;
-        case 81: moveUp();
-                    break;
-        case 69: moveDown();
-                    break;
     }
 
 }
