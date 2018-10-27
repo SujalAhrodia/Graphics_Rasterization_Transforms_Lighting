@@ -9,12 +9,26 @@ const INPUT_TRIANGLES_URL =
 "http://localhost:8000/triangles.json";
 //"https://pages.github.ncsu.edu/cgclass/exercise5/triangles.json"; // triangles file loc
 const INPUT_ELLIPSOIDS_URL = "https://pages.github.ncsu.edu/cgclass/exercise5/ellipsoids.json"; // ellipsoids file loc
+
+//Default Eye and Light positions
 var Eye = new vec3.fromValues(0.5,0.5,-0.5); // default eye position in world space
 var Light = new vec3.fromValues(0.5,0.5,-0.5);
 
-var lookAt = new vec3.fromValues(0.0, 0.0, 1.0);
+//Default lookAt and up
+var lookAt = new vec3.fromValues(0, 0, 1);
 var lookAtP = new vec3.fromValues(0.5, 0.5, 0);
 var up = new vec3.fromValues(0.0, 1.0, 0.0);
+
+//Original system values
+var origin = new vec3.fromValues(0,0,0);
+var origin_lookAtP = new vec3.fromValues(0,0,-1);
+var origin_up = new vec3.fromValues(0,1,0);
+
+//Transformation system variables to origin
+var origin_t= new vec3.fromValues(0,0,0);
+var origin_tlookAtP = vec3.fromValues(0,0,0);
+var origin_tup = new vec3.fromValues(0,0,0);
+//original values
 
 /* input globals */
 var inputTriangles; // the triangles read in from json
@@ -27,6 +41,7 @@ var vertexBuffers = []; // this contains vertex coordinates in triples, organize
 var triangleBuffers = []; // this contains indices into vertexBuffers in triples, organized by tri set
 var vertexNormalBuffers = []; //this contains vertex normals in triplets 
 
+//location of attributes
 var vertexPositionAttrib; // where to put position for vertex shader
 var vertexNormalAttrib;
 var vertexMode;
@@ -38,14 +53,18 @@ var vertexExp;
 var vertexEye;
 var vertexLight;
 
+//location of uniform
 var modelMatrixULoc; // where to put the model matrix for vertex shader
 var viewMatrixULoc; //view matrix location
 var perspectiveMatrixULoc;  //perpective matrix location
 
+//Mode selection
 var mode = 0.0;
 var triangleSelection = [];
 var triangleSelection_index = -1;
 
+//global matrices
+var viewMat;
 // ASSIGNMENT HELPER FUNCTIONS
 
 // get the JSON file from the passed URL
@@ -298,19 +317,74 @@ function setupShaders() {
 } // end setup shaders
 
 
+function myLookAt(viewMat, Eye, lookAtP, up) 
+{    
+    var z = new vec3.fromValues(0,0,0);
+    vec3.normalize(z, new vec3.fromValues(-lookAtP[0] + Eye[0], -lookAtP[1] + Eye[1], -lookAtP[2] + Eye[2]));
+    var x = new vec3.fromValues(0,0,0);
+    
+    vec3.cross(x, z, up);
+    vec3.normalize(x,x);
+    
+    var y = new vec3.fromValues(0,0,0);
+    vec3.cross(y, x, z);
+    vec3.normalize(y,y);
+    
+    viewMat[0] = x[0];
+    viewMat[4] = x[1];
+    viewMat[8] = x[2];
+    viewMat[12] = -vec3.dot(x,Eye);
+    viewMat[1] = y[0];
+    viewMat[5] = y[1];
+    viewMat[9] = y[2];
+    viewMat[13] = -vec3.dot(y,Eye);
+    viewMat[2] = z[0];
+    viewMat[6] = z[1];
+    viewMat[10] = z[2];
+    viewMat[14] = -vec3.dot(z,Eye);
+    viewMat[3] = 0;
+    viewMat[7] = 0;
+    viewMat[11] = 0;
+    viewMat[15] = 1;
+
+    return viewMat;
+}
 // render the loaded model
 function renderTriangles() {
     requestAnimationFrame(renderTriangles);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); // clear frame/depth buffers    
 
-    lookAtP = new vec3.fromValues(0,0,0);
+    var lookAtP = new vec3.fromValues(0,0,0);
 
     vec3.add(lookAtP, Eye, lookAt);
 
-    var viewMat = mat4.lookAt(mat4.create(), Eye, lookAtP, up);
-    console.log(viewMat);
+    viewMat = myLookAt(mat4.create(), Eye, lookAtP, up);
+    //console.log(viewMat);
 
-    var pMat = mat4.perspective(mat4.create(), Math.PI/2, 1.0, 0.5, 100.0);
+    var pMat = mat4.perspective(mat4.create(), Math.PI/2, 1.0, 0.5, 1.5);
+
+    //transformation according to viewMatrix
+
+    //transform origin
+    var t = new vec4.fromValues(origin[0], origin[1], origin[2], 1);
+    vec4.transformMat4(t, t, viewMat);
+    origin_t[0] = t[0];
+    origin_t[1] = t[1];
+    origin_t[2] = t[2];
+
+    //transform lookAtP
+    var t = new vec4.fromValues(origin_lookAtP[0], origin_lookAtP[1], origin_lookAtP[2], 1);
+    vec4.transformMat4(t, t, viewMat);
+    origin_tlookAtP[0] = t[0];
+    origin_tlookAtP[1] = t[1];
+    origin_tlookAtP[2] = t[2];
+
+    //transform up
+    var t = new vec4.fromValues(origin_up[0], origin_up[1], origin_up[2], 1);
+    vec4.transformMat4(t, t, viewMat);
+    origin_tup[0] = t[0] - origin_t[0];
+    origin_tup[1] = t[1] - origin_t[1];
+    origin_tup[2] = t[2] - origin_t[2];
 
     for (var whichTriSet=0; whichTriSet<numTriangleSets; whichTriSet++) { 
         
@@ -399,6 +473,203 @@ function moveRight()
     vec3.add(Eye, Eye, x);
 }
 
+function yaw_Left()
+{
+    var lookAtP = new vec3.fromValues(0, 0, 0);
+    vec3.add(lookAtP, Eye, lookAt);
+
+    var transformed_lookAt = new vec4.fromValues(0,0,0,1);
+    var rotate_lookAt = mat4.create();
+
+    transformed_lookAt[0] = lookAtP[0];
+    transformed_lookAt[1] = lookAtP[1];
+    transformed_lookAt[2] = lookAtP[2];
+
+    //original view
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    
+    //Rotate along Y-axis
+    mat4.multiply(rotate_lookAt,
+                    mat4.fromRotation(mat4.create(), 0.7*Math.PI/180, vec3.fromValues(0,1,0)),
+                    rotate_lookAt);
+
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, viewMat);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, rotate_lookAt);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, orig_view);
+
+    //new lookAtP
+    lookAtP[0] = transformed_lookAt[0];
+    lookAtP[1] = transformed_lookAt[1];
+    lookAtP[2] = transformed_lookAt[2];
+
+    //setting the new lookAt
+    vec3.subtract(lookAt, lookAtP, Eye);
+    vec3.normalize(lookAt, lookAt);
+}
+
+function yaw_Right()
+{
+    var lookAtP = new vec3.fromValues(0, 0, 0);
+    vec3.add(lookAtP, Eye, lookAt);
+
+    var transformed_lookAt = new vec4.fromValues(0,0,0,1);
+    var rotate_lookAt = mat4.create();
+
+    transformed_lookAt[0] = lookAtP[0];
+    transformed_lookAt[1] = lookAtP[1];
+    transformed_lookAt[2] = lookAtP[2];
+
+    //original view
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+
+    //Rotate along Y-axis
+    mat4.multiply(rotate_lookAt,
+                    mat4.fromRotation(mat4.create(), -0.7*Math.PI/180, vec3.fromValues(0,1,0)),
+                    rotate_lookAt);
+
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, viewMat);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, rotate_lookAt);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, orig_view);
+
+    //new lookAtP
+    lookAtP[0] = transformed_lookAt[0];
+    lookAtP[1] = transformed_lookAt[1];
+    lookAtP[2] = transformed_lookAt[2];
+
+    //setting the new lookAt
+    vec3.subtract(lookAt, lookAtP, Eye);
+    vec3.normalize(lookAt, lookAt);
+
+}
+
+function pitch_Up()
+{   
+    var lookAtP =new vec3.fromValues(0,0,0);
+    vec3.add(lookAtP, Eye, lookAt);
+
+    var transformed_lookAt = new vec4.fromValues(0,0,0,1);
+    var rotate_lookAt = mat4.create();
+
+    transformed_lookAt[0] = lookAtP[0];
+    transformed_lookAt[1] = lookAtP[1];
+    transformed_lookAt[2] = lookAtP[2];
+
+    //original view
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+
+    mat4.multiply(rotate_lookAt,
+                    mat4.fromRotation(mat4.create(), -0.7*Math.PI/180, vec3.fromValues(1,0,0)),
+                    rotate_lookAt);
+
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, viewMat);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, rotate_lookAt);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, orig_view);
+
+    //new lookAtP
+    lookAtP[0] = transformed_lookAt[0];
+    lookAtP[1] = transformed_lookAt[1];
+    lookAtP[2] = transformed_lookAt[2];
+
+    //setting the new lookAt
+    vec3.subtract(lookAt, lookAtP, Eye);
+    vec3.normalize(lookAt, lookAt);
+
+    var up_t = new vec3.fromValues(0,0,0);
+    vec3.add(up_t, Eye, up);
+
+    var transformed_Up = new vec4.fromValues(0,0,0,1);
+    var rotate_up = mat4.create();
+
+    transformed_Up[0] = up_t[0];
+    transformed_Up[1] = up_t[1];
+    transformed_Up[2] = up_t[2];
+    
+    //original view
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+
+    //rotate along X-axis
+    mat4.multiply(rotate_up,
+                    mat4.fromRotation(mat4.create(), -0.7*Math.PI/180, vec3.fromValues(1,0,0)),
+                    rotate_up);
+
+    vec4.transformMat4(transformed_Up, transformed_Up, viewMat);
+    vec4.transformMat4(transformed_Up, transformed_Up, rotate_up);
+    vec4.transformMat4(transformed_Up, transformed_Up, orig_view);
+
+    //new Up 
+    up_t[0] = transformed_Up[0];
+    up_t[1] = transformed_Up[1];
+    up_t[2] = transformed_Up[2];
+
+    //setting the new Up
+    vec3.subtract(up, up_t, Eye);
+    vec3.normalize(up, up);
+}
+
+function pitch_Down()
+{
+    var lookAtP =new vec3.fromValues(0,0,0);
+    vec3.add(lookAtP, Eye, lookAt);
+
+    var transformed_lookAt = new vec4.fromValues(0,0,0,1);
+    var rotate_lookAt = mat4.create();
+
+    transformed_lookAt[0] = lookAtP[0];
+    transformed_lookAt[1] = lookAtP[1];
+    transformed_lookAt[2] = lookAtP[2];
+
+    //original view
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+
+    mat4.multiply(rotate_lookAt,
+                    mat4.fromRotation(mat4.create(), 0.7*Math.PI/180, vec3.fromValues(1,0,0)),
+                    rotate_lookAt);
+
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, viewMat);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, rotate_lookAt);
+    vec4.transformMat4(transformed_lookAt, transformed_lookAt, orig_view);
+
+    //new lookAtP
+    lookAtP[0] = transformed_lookAt[0];
+    lookAtP[1] = transformed_lookAt[1];
+    lookAtP[2] = transformed_lookAt[2];
+
+    //setting the new lookAt
+    vec3.subtract(lookAt, lookAtP, Eye);
+    vec3.normalize(lookAt, lookAt);
+
+    var up_t = new vec3.fromValues(0,0,0);
+    vec3.add(up_t, Eye, up);
+
+    var transformed_Up = new vec4.fromValues(0,0,0,1);
+    var rotate_up = mat4.create();
+
+    transformed_Up[0] = up_t[0];
+    transformed_Up[1] = up_t[1];
+    transformed_Up[2] = up_t[2];
+    
+    //original view
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+
+    //rotate along X-axis
+    mat4.multiply(rotate_up,
+                    mat4.fromRotation(mat4.create(), 0.7*Math.PI/180, vec3.fromValues(1,0,0)),
+                    rotate_up);
+
+    vec4.transformMat4(transformed_Up, transformed_Up, viewMat);
+    vec4.transformMat4(transformed_Up, transformed_Up, rotate_up);
+    vec4.transformMat4(transformed_Up, transformed_Up, orig_view);
+
+    //new Up 
+    up_t[0] = transformed_Up[0];
+    up_t[1] = transformed_Up[1];
+    up_t[2] = transformed_Up[2];
+
+    //setting the new Up
+    vec3.subtract(up, up_t, Eye);
+    vec3.normalize(up, up);
+}
+
 function Centroid(whichTriSet)
 {
     var coordinates = inputTriangles[whichTriSet].coordArray;
@@ -418,8 +689,12 @@ function Centroid(whichTriSet)
     t[1] = centroid[1];
     t[2] = centroid[2];
 
+    //transform mat4 to vec4
     vec4.transformMat4(t, t, inputTriangles[whichTriSet].mMatrix);
-
+    
+    //scaled centroid
+    //console.log("transform="+ t);
+    
     centroid[0] = t[0];
     centroid[1] = t[1];
     centroid[2] = t[2];
@@ -444,7 +719,8 @@ function Highlight(whichTriSet, scaleFactor)
     mat4.multiply(inputTriangles[whichTriSet].mMatrix,
                     mat4.fromTranslation(mat4.create(),setCenter),
                     inputTriangles[whichTriSet].mMatrix);
-        console.log("scale:"+inputTriangles[whichTriSet].mMatrix);
+    //scaled matrix
+    //console.log("scale:"+inputTriangles[whichTriSet].mMatrix);
 
 }
 
@@ -461,9 +737,9 @@ function inc_A()
 {   
     if (triangleSelection[triangleSelection_index] == 1)
     {
-        inputTriangles[triangleSelection_index].Ka[0] = (inputTriangles[triangleSelection_index].Ka[0] + 0.1);
-        inputTriangles[triangleSelection_index].Ka[1] = (inputTriangles[triangleSelection_index].Ka[1] + 0.1);
-        inputTriangles[triangleSelection_index].Ka[2] = (inputTriangles[triangleSelection_index].Ka[2] + 0.1);
+        inputTriangles[triangleSelection_index].Ka[0] = (inputTriangles[triangleSelection_index].Ka[0] + 0.1)%1;
+        inputTriangles[triangleSelection_index].Ka[1] = (inputTriangles[triangleSelection_index].Ka[1] + 0.1)%1;
+        inputTriangles[triangleSelection_index].Ka[2] = (inputTriangles[triangleSelection_index].Ka[2] + 0.1)%1;
     }
 
 }
@@ -482,9 +758,9 @@ function inc_S()
 {
     if (triangleSelection[triangleSelection_index] == 1)
     {
-        inputTriangles[triangleSelection_index].Ks[0] = (inputTriangles[triangleSelection_index].Ks[0] + 0.1);
-        inputTriangles[triangleSelection_index].Ks[1] = (inputTriangles[triangleSelection_index].Ks[1] + 0.1);
-        inputTriangles[triangleSelection_index].Ks[2] = (inputTriangles[triangleSelection_index].Ks[2] + 0.1);
+        inputTriangles[triangleSelection_index].Ks[0] = (inputTriangles[triangleSelection_index].Ks[0] + 0.1)%1;
+        inputTriangles[triangleSelection_index].Ks[1] = (inputTriangles[triangleSelection_index].Ks[1] + 0.1)%1;
+        inputTriangles[triangleSelection_index].Ks[2] = (inputTriangles[triangleSelection_index].Ks[2] + 0.1)%1;
     }
 }
 
@@ -492,7 +768,7 @@ function inc_exp()
 {
     if (triangleSelection[triangleSelection_index] == 1)
     {
-        inputTriangles[triangleSelection_index].n = (inputTriangles[triangleSelection_index].n + 1);
+        inputTriangles[triangleSelection_index].n = (inputTriangles[triangleSelection_index].n + 1)%20;
        
     }
 }
@@ -517,10 +793,14 @@ function moveThings(e)
                     break;
         case 'e': moveDown();
                     break;
-        case 'A':   break;
-
-        case 'D':   break;
-
+        case 'A': yaw_Left();  
+                    break;
+        case 'D': yaw_Right();  
+                    break;
+        case 'W': pitch_Up();
+                    break;
+        case 'S': pitch_Down();
+                    break;                    
         case 'ArrowLeft': 
                     if (triangleSelection_index != -1)
                     {
