@@ -4,15 +4,13 @@
 const WIN_Z = 0;  // default graphics window z coord in world space
 const WIN_LEFT = 0; const WIN_RIGHT = 1;  // default left and right x coords in world space
 const WIN_BOTTOM = 0; const WIN_TOP = 1;  // default top and bottom y coords in world space
-const INPUT_TRIANGLES_URL = 
-//"https://ajgavane.github.io/Computer_Graphics/triangles.json";
-"http://localhost:8000/triangles.json";
-//"https://pages.github.ncsu.edu/cgclass/exercise5/triangles.json"; // triangles file loc
+const INPUT_TRIANGLES_URL = "https://ncsucgclass.github.io/prog2/triangles.json"; // triangles file loc
 const INPUT_ELLIPSOIDS_URL = "https://pages.github.ncsu.edu/cgclass/exercise5/ellipsoids.json"; // ellipsoids file loc
 
 //Default Eye and Light positions
 var Eye = new vec3.fromValues(0.5,0.5,-0.5); // default eye position in world space
-var Light = new vec3.fromValues(0.5,0.5,-0.5);
+var Light = new vec3.fromValues(-3, 1, -0.5);
+//(-3,1,-0.5)
 
 //Default lookAt and up
 var lookAt = new vec3.fromValues(0, 0, 1);
@@ -57,6 +55,7 @@ var vertexLight;
 var modelMatrixULoc; // where to put the model matrix for vertex shader
 var viewMatrixULoc; //view matrix location
 var perspectiveMatrixULoc;  //perpective matrix location
+var normalMatrixULoc;
 
 //Mode selection
 var mode = 0.0;
@@ -141,6 +140,11 @@ function loadTriangles() {
             inputTriangles[whichSet].Ks = inputTriangles[whichSet].material.specular;
             inputTriangles[whichSet].n = inputTriangles[whichSet].material.n;
 
+            inputTriangles[whichSet].mMatrix = mat4.create();
+            inputTriangles[whichSet].nMatrix = mat4.create();
+
+            triangleSelection.push(0);
+
             //console.log("values:"+ inputTriangles[whichSet].exp);
 
             for (whichSetVert=0; whichSetVert<inputTriangles[whichSet].vertices.length; whichSetVert++) {
@@ -162,10 +166,6 @@ function loadTriangles() {
             vertexNormalBuffers[whichSet] = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, vertexNormalBuffers[whichSet]);
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(inputTriangles[whichSet].normalArray),gl.STATIC_DRAW);
-
-            inputTriangles[whichSet].mMatrix = mat4.create();
-            
-            triangleSelection.push(0);
 
             // set up the triangle index array, adjusting indices across sets
             inputTriangles[whichSet].indexArray = []; // create a list of tri indices for this tri set
@@ -241,20 +241,20 @@ function setupShaders() {
         uniform mat4 uModelMatrix; 
         uniform mat4 uViewMatrix; 
         uniform mat4 uPerpectiveMatrix;
+        uniform mat4 uNormalMatrix;
 
         varying vec3 P;
         varying vec3 N;
 
         void main(void) {
             vec4 position = uModelMatrix * vec4(vertexPosition, 1.0); 
-            P = vec3(position);
             N = normalize(vertexNormal);
+            P = vec3(position);
+            N = normalize(vec3(uNormalMatrix * vec4(N, 0.0)));
 
             gl_Position = uViewMatrix * vec4(P, 1.0);
 
             gl_Position = uPerpectiveMatrix * gl_Position;
-
-           //gl_Position = uModelMatrix * vec4(vertexPosition, 1.0);
         }
     `;
     
@@ -294,6 +294,7 @@ function setupShaders() {
                 modelMatrixULoc = gl.getUniformLocation(shaderProgram, "uModelMatrix"); // ptr to mmat
                 viewMatrixULoc = gl.getUniformLocation(shaderProgram, "uViewMatrix"); //ptr to vmat
                 perspectiveMatrixULoc = gl.getUniformLocation(shaderProgram, "uPerpectiveMatrix");
+                normalMatrixULoc = gl.getUniformLocation(shaderProgram, "uNormalMatrix");
 
                 vertexMode = gl.getUniformLocation(shaderProgram, "mode");
 
@@ -349,10 +350,19 @@ function myLookAt(viewMat, Eye, lookAtP, up)
 
     return viewMat;
 }
+
+function Triangle_Normals() {
+    for (var whichTriSet=0; whichTriSet<numTriangleSets; whichTriSet++) {
+        mat4.invert(inputTriangles[whichTriSet].nMatrix, inputTriangles[whichTriSet].mMatrix);
+        mat4.transpose(inputTriangles[whichTriSet].nMatrix, inputTriangles[whichTriSet].nMatrix);
+        //console.log(inputTriangles[whichTriSet].nMatrix);
+    }
+}
 // render the loaded model
 function renderTriangles() {
     requestAnimationFrame(renderTriangles);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); // clear frame/depth buffers    
+
 
     var lookAtP = new vec3.fromValues(0,0,0);
 
@@ -361,7 +371,7 @@ function renderTriangles() {
     viewMat = myLookAt(mat4.create(), Eye, lookAtP, up);
     //console.log(viewMat);
 
-    var pMat = mat4.perspective(mat4.create(), Math.PI/2, 1.0, 0.5, 1.5);
+    var pMat = mat4.perspective(mat4.create(), Math.PI/2, 1.0, 0.5, 100);
 
     //transformation according to viewMatrix
 
@@ -386,13 +396,15 @@ function renderTriangles() {
     origin_tup[1] = t[1] - origin_t[1];
     origin_tup[2] = t[2] - origin_t[2];
 
+    Triangle_Normals();
+
     for (var whichTriSet=0; whichTriSet<numTriangleSets; whichTriSet++) { 
         
         // pass modeling matrix for set to shader
         gl.uniformMatrix4fv(modelMatrixULoc, false, inputTriangles[whichTriSet].mMatrix);
         gl.uniformMatrix4fv(viewMatrixULoc, false, viewMat);
         gl.uniformMatrix4fv(perspectiveMatrixULoc, false, pMat);
-
+        gl.uniformMatrix4fv(normalMatrixULoc, false, inputTriangles[whichTriSet].nMatrix);
 
         gl.uniform3fv(vertexEye, Eye);
         gl.uniform3fv(vertexLight, Light);
@@ -724,6 +736,35 @@ function Highlight(whichTriSet, scaleFactor)
 
 }
 
+function model_T(whichTriSet, Dir)
+{
+    var setCenter = Centroid(whichTriSet);
+
+    mat4.multiply(inputTriangles[whichTriSet].mMatrix,
+                    mat4.fromTranslation(mat4.create, Dir),
+                    inputTriangles[whichTriSet].mMatrix);
+} 
+
+function model_R(whichTriSet, axis, angle)
+{
+    var setCenter = Centroid(whichTriSet);
+
+    mat4.multiply(inputTriangles[whichTriSet].mMatrix, 
+                    mat4.fromTranslation(mat4.create(), vec3.negate(vec3.create(), setCenter)),
+                    inputTriangles[whichTriSet].mMatrix);
+
+    //in Radian
+    var Angle = angle*Math.PI/180;
+
+    mat4.multiply(inputTriangles[whichTriSet].mMatrix,
+                    mat4.fromRotation(mat4.create(), Angle, axis),
+                    inputTriangles[whichTriSet].mMatrix);
+
+    mat4.multiply(inputTriangles[whichTriSet].mMatrix, 
+                    mat4.fromTranslation(mat4.create(), setCenter),
+                    inputTriangles[whichTriSet].mMatrix);
+}
+
 function anti_Highlight()
 {
     if (triangleSelection[triangleSelection_index] == 1)
@@ -773,12 +814,213 @@ function inc_exp()
     }
 }
 
+function model_TLeft()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(-1.0,0.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+    vec3.normalize(new_dir, new_dir);
+    vec3.scale(new_dir, new_dir, 0.03);
+
+    if(triangleSelection[triangleSelection_index] == 1)
+    {
+        model_T(triangleSelection_index, new_dir);
+    }
+}
+
+function model_TRight()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(1.0,0.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+    vec3.normalize(new_dir, new_dir);
+    vec3.scale(new_dir, new_dir, 0.03);
+
+    if(triangleSelection[triangleSelection_index] == 1)
+    {
+        model_T(triangleSelection_index, new_dir);
+    }
+
+}
+
+function model_TBackward()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,0.0,-1.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+    vec3.normalize(new_dir, new_dir);
+    vec3.scale(new_dir, new_dir, 0.03);
+
+    if(triangleSelection[triangleSelection_index] == 1)
+    {
+        model_T(triangleSelection_index, new_dir);
+    }
+}
+
+function model_TForward()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,0.0,1.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+    vec3.normalize(new_dir, new_dir);
+    vec3.scale(new_dir, new_dir, 0.03);
+
+    if(triangleSelection[triangleSelection_index] == 1)
+    {
+        model_T(triangleSelection_index, new_dir);
+    }
+}
+
+function model_TUp()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,1.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+    vec3.normalize(new_dir, new_dir);
+    vec3.scale(new_dir, new_dir, 0.03);
+
+    if(triangleSelection[triangleSelection_index] == 1)
+    {
+        model_T(triangleSelection_index, new_dir);
+    }
+}
+
+function model_TDown()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,-1.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+    vec3.normalize(new_dir, new_dir);
+    vec3.scale(new_dir, new_dir, 0.03);
+
+    if(triangleSelection[triangleSelection_index] == 1)
+    {
+        model_T(triangleSelection_index, new_dir);
+    }
+}
+
+function model_yawLeft()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,1.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+
+    vec3.normalize(new_dir, new_dir);
+
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        model_R(triangleSelection_index, new_dir, 10);
+    }
+}
+
+function model_yawRight()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,1.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+
+    vec3.normalize(new_dir, new_dir);
+
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        model_R(triangleSelection_index, new_dir, -10);
+    }
+}
+
+function model_PitchUp()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(1.0,0.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+
+    vec3.normalize(new_dir, new_dir);
+
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        model_R(triangleSelection_index, new_dir, 10);
+    }
+}
+
+function model_PitchDown()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(1.0,0.0,0.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+
+    vec3.normalize(new_dir, new_dir);
+
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        model_R(triangleSelection_index, new_dir, -10);
+    }
+}
+
+function model_RollClock()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,0.0,1.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+
+    vec3.normalize(new_dir, new_dir);
+
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        model_R(triangleSelection_index, new_dir, -10);
+    }
+}
+
+function model_RollAClock()
+{
+    var orig_view = myLookAt(mat4.create(), origin_t, origin_tlookAtP, origin_tup);
+    var dir =  new vec4.fromValues(0.0,0.0,1.0,0.0);
+
+    vec4.transformMat4(dir, dir, orig_view);
+
+    var new_dir = vec3.fromValues(dir[0], dir[1], dir[2]);
+
+    vec3.normalize(new_dir, new_dir);
+
+    if (triangleSelection[triangleSelection_index] == 1)
+    {
+        model_R(triangleSelection_index, new_dir, 10);
+    }
+}
+
 function moveThings(e)
 {   
-    console.log(e.key);
-    console.log(e.keyCode);
-    console.log(e.charCode);
-
     switch(e.key)
     {
         case 'a': moveLeft();
@@ -851,7 +1093,31 @@ function moveThings(e)
                     break;
         case '3': inc_S();
                     break;
-        
+        case 'k': model_TLeft();
+                    break;
+        case ';': model_TRight();
+                    break;
+        case 'o': model_TBackward();
+                    break;
+        case 'l': model_TForward();
+                    break;
+        case 'i': model_TUp();
+                    break;
+        case 'p': model_TDown();
+                    break;
+        case 'K': model_yawLeft();
+                    break;
+        case ':': model_yawRight();
+                    break;
+        case 'O': model_PitchUp();
+                    break;
+        case 'L': model_PitchDown();
+                    break;
+        case 'I': model_RollClock();
+                    break;
+        case 'P': model_RollAClock();
+                    break;
+
         default:    break;
 
     }
